@@ -29,7 +29,11 @@
   </head>
   <body>
     <h1>Halal Stock Checker (SEC)</h1>
-    <p class="hint">الأولوية: بيانات SEC الربعية (10-Q) عبر بروكسيك على Vercel. إذا كان آخر ربع ناقص نرجع للربع السابق تلقائيًا. لو SEC ناقص بالكامل نحاول FMP (quarter). إن تعذّر: <b>Mubah</b>.</p>
+    <p class="hint">
+      الأولوية: بيانات SEC الربعية (10-Q) عبر بروكسيك على Vercel.
+      إذا كان آخر ربع ناقص نرجع للربع السابق تلقائيًا. لو SEC ناقص بالكامل نحاول FMP (quarter).
+      إن تعذّر: <b>Mubah</b>.
+    </p>
 
     <div class="row">
       <input id="ticker" placeholder="AAPL, TSLA, MSFT ..." />
@@ -41,8 +45,10 @@
 
     <script>
       /* ===== إعدادات ===== */
-      const PROXY = "https://sec-proxy.vercel.app/api/sec-proxy"; // بروكسيك
-      const FMP_KEY = "pIugzfG67qw0hwcFvzzSzF2Zax1eZXt6"; // ← استبدله بمفتاحك من FMP
+      // بروكسيك السابق لتمرير طلبات SEC
+      const PROXY = "https://sec-proxy.vercel.app/api/sec-proxy";
+      // مفتاح FMP الذي أرسلته:
+      const FMP_KEY = "pIugzfG67qw0hwcFvzzSzF2Zax1eZXt6";
 
       const LIMITS = { MAX_DTA: 0.30, MAX_CTA: 0.30, MAX_IMPURE: 0.05 };
       const BANNED = [
@@ -70,10 +76,9 @@
 
       function pad10(cik){ let s=String(Math.trunc(Number(cik)||0)); while(s.length<10) s="0"+s; return s; }
       function safeDiv(a,b){ return (isFinite(a)&&isFinite(b)&&b!==0)?(a/b):0; }
-      function sum(arr){ return arr.reduce((s,x)=>s+(isFinite(x)?x:0),0); }
       function sumPos(arr){ return arr.reduce((s,x)=>s+(isFinite(x)&&x>0?x:0),0); }
 
-      // رجّع كل تواريخ الربع (من 10-Q) مرتبة تنازليًا، بدون تكرار
+      // رجّع كل تواريخ الربع (من 10-Q) مرتبة تنازليًا
       function listQuarterEnds(F){
         const ends = new Set();
         const collect = (node)=>{
@@ -87,12 +92,11 @@
         return Array.from(ends).sort((a,b)=>new Date(b)-new Date(a));
       }
 
-      // قراءة قيمة من مجموعة مفاتيح GAAP لربع محدد (end) ومن 10-Q
+      // قراءة قيمة من مجموعة مفاتيح GAAP لربع محدد
       function pickForEnd(F, keys, end){
         for(const k of keys){
           const node = F[k]; if(!node||!node.units) continue;
           const usd = node.units.USD || node.units.usd; if(!usd) continue;
-          // فضّل 10-Q لهذا التاريخ، وإن ما وجد قيّم نفس التاريخ حتى لو فورم مختلف
           const exactQ = usd.find(e => (e.form||"").toUpperCase()==="10-Q" && e.end===end);
           if(exactQ && isFinite(Number(exactQ.val))) return Number(exactQ.val);
           const exactAny = usd.find(e => e.end===end);
@@ -127,39 +131,54 @@
         throw new Error("Ticker not found via SEC maps");
       }
 
-      /* ===== FMP (quarter) fallback: نجرب حتى 4 أرباع ونختار أول ربع مكتمل ===== */
+      /* ===== FMP (quarter) fallback: لا ترمي أخطاء — ارجع null عند الفشل ===== */
       async function fetchFromFMPQuarterRolling(ticker){
         const base = "https://financialmodelingprep.com/api/v3";
-        const qs = `?period=quarter&limit=4&apikey=${encodeURIComponent(FMP_KEY)}`;
+        const qs = `?period=quarter&limit=4&datatype=json&apikey=${encodeURIComponent(FMP_KEY)}`;
 
-        const [bsRes, isRes] = await Promise.all([
-          fetch(`${base}/balance-sheet-statement/${encodeURIComponent(ticker)}${qs}`),
-          fetch(`${base}/income-statement/${encodeURIComponent(ticker)}${qs}`)
-        ]);
-        if(!bsRes.ok || !isRes.ok) throw new Error("FMP HTTP error");
+        let bsArr = [], isArr = [];
+        try {
+          const [bsRes, isRes] = await Promise.allSettled([
+            fetch(`${base}/balance-sheet-statement/${encodeURIComponent(ticker)}${qs}`),
+            fetch(`${base}/income-statement/${encodeURIComponent(ticker)}${qs}`)
+          ]);
 
-        const bsArr = await bsRes.json();
-        const isArr = await isRes.json();
+          if (bsRes.status === "fulfilled" && bsRes.value.ok) {
+            bsArr = await bsRes.value.json();
+          }
+          if (isRes.status === "fulfilled" && isRes.value.ok) {
+            isArr = await isRes.value.json();
+          }
+        } catch(_) {
+          // تجاهل أي استثناءات شبكة — سنرجع null بالأسفل
+        }
 
-        // نمشي على الأرباع من الأحدث للأقدم ونختار أول ربع فيه أصول + إيرادات
-        for(let i=0;i<4;i++){
+        if (!Array.isArray(bsArr)) bsArr = [];
+        if (!Array.isArray(isArr)) isArr = [];
+
+        for (let i = 0; i < 4; i++) {
           const bs = bsArr[i] || {};
           const is_ = isArr[i] || {};
-          const num = v => { const n=Number(v); return isFinite(n)?n:null; };
+          const num = v => { const n = Number(v); return isFinite(n) ? n : null; };
 
           const assets = num(bs.totalAssets) ?? num(bs.totalAssetsUSD) ?? null;
-          const debt   = (num(bs.totalDebt) ?? ((num(bs.shortTermDebt)||0)+(num(bs.longTermDebt)||0)) );
-          const cash   = (num(bs.cashAndShortTermInvestments) ?? ((num(bs.cashAndCashEquivalents)||0)+(num(bs.shortTermInvestments)||0)) );
+          const debt   = (num(bs.totalDebt) ?? ((num(bs.shortTermDebt)||0) + (num(bs.longTermDebt)||0)));
+          const cash   = (num(bs.cashAndShortTermInvestments) ?? ((num(bs.cashAndCashEquivalents)||0) + (num(bs.shortTermInvestments)||0)));
           const revenue= num(is_.revenue) ?? num(is_.totalRevenue) ?? null;
           const interestIncome = Math.max(
             0,
             num(is_.interestIncome) ?? num(is_.interestIncomeNet) ?? num(is_.investmentIncome) ?? 0
           );
 
-          if(assets>0 && revenue>0){
+          if (assets > 0 && revenue > 0) {
             return {
-              assets, debt: debt||0, cash: cash||0, revenue, interestIncome: interestIncome||0,
-              form:"FMP-Q", end: is_.date || bs.date || ""
+              assets,
+              debt: debt || 0,
+              cash: cash || 0,
+              revenue,
+              interestIncome: interestIncome || 0,
+              form: "FMP-Q",
+              end: is_.date || bs.date || ""
             };
           }
         }
@@ -241,16 +260,28 @@
             return;
           }
 
-          // CompanyFacts: نجمع كل تواريخ الربع ثم نجربها واحد واحد
+          // CompanyFacts: جرّب آخر ربع ثم الذي قبله…
           let assets=null, debt=null, cash=null, revenue=null, interestIncome=0;
           let form="10-Q", end="";
           try{
             const facts = await fetchSEC(`https://data.sec.gov/api/xbrl/companyfacts/CIK${pad10(cik)}.json`);
             const F = (facts.facts && facts.facts["us-gaap"]) ? facts.facts["us-gaap"] : {};
 
-            const ends = listQuarterEnds(F); // [الأحدث ← الأقدم]
-            // لو ما فيه 10-Q نهائيًا، نجرب أي تواريخ لأي فورم (آخرًا ثم الذي قبله)
-            const anyEnds = ()=>{
+            const ends = (()=>{
+              const qEnds = (function listQuarterEndsInner(F){
+                const ends = new Set();
+                Object.values(F||{}).forEach(node=>{
+                  if(node?.units){
+                    const usd=node.units.USD||node.units.usd;
+                    (usd||[]).forEach(e=>{ if((e.form||"").toUpperCase()==="10-Q" && e.end) ends.add(e.end); });
+                  }
+                });
+                return Array.from(ends).sort((a,b)=>new Date(b)-new Date(a));
+              })(F);
+
+              if(qEnds.length) return qEnds;
+
+              // لو ما فيه 10-Q، خذ أي تواريخ موجودة
               const s = new Set();
               Object.values(F||{}).forEach(node=>{
                 if(node?.units){
@@ -259,11 +290,9 @@
                 }
               });
               return Array.from(s).sort((a,b)=>new Date(b)-new Date(a));
-            };
+            })();
 
-            const tryEnds = ends.length ? ends : anyEnds();
-
-            for(const e of tryEnds){
+            for(const e of ends){
               const a = pickForEnd(F,["Assets"], e);
               const d = pickForEnd(F,["Debt","InterestBearingLiabilities","Liabilities"], e);
               const c1= pickForEnd(F,["CashAndCashEquivalentsAtCarryingValue"], e) || 0;
@@ -284,7 +313,7 @@
             }
           }catch(_){}
 
-          // لو ما لقينا ربع مكتمل في SEC → FMP (آخر 4 أرباع) بنفس منطق العودة للخلف
+          // لو SEC ما عطانا ربع مكتمل → FMP (بدون أخطاء)
           if(!(assets>0 && revenue>0)){
             const f = await fetchFromFMPQuarterRolling(t);
             if(f){
@@ -293,7 +322,7 @@
             }
           }
 
-          // إذا لا SEC ولا FMP وفرت ربع مكتمل → مباح (غير مؤكد)
+          // إذا لا SEC ولا FMP وفرت ربع مكتمل → Mubah
           if(!(assets>0 && revenue>0)){
             render(t, cik, {dta:null, cta:null, irr:null, status:"Mubah", note:"No complete quarterly data found."}, source, {form:"", end:""});
             return;
