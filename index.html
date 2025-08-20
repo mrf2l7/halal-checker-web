@@ -29,7 +29,7 @@
   </head>
   <body>
     <h1>Halal Stock Checker (SEC)</h1>
-    <p class="hint">المصدر أولاً SEC (Submissions + XBRL CompanyFacts) عبر بروكسيك على Vercel. وإذا نقصت بيانات الربع نستخدم FMP كبديل واضح.</p>
+    <p class="hint">الأولوية: بيانات SEC الربعية (10-Q) عبر بروكسيك على Vercel. إذا كان آخر ربع ناقص نرجع للربع السابق تلقائيًا. لو SEC ناقص بالكامل نحاول FMP (quarter). إن تعذّر: <b>Mubah</b>.</p>
 
     <div class="row">
       <input id="ticker" placeholder="AAPL, TSLA, MSFT ..." />
@@ -41,8 +41,8 @@
 
     <script>
       /* ===== إعدادات ===== */
-      const PROXY = "https://sec-proxy.vercel.app/api/sec-proxy"; // بروكسيك السابق
-      const FMP_KEY = "pIugzfG67qw0hwcFvzzSzF2Zax1eZXt6"; // ← استبدلها بمفتاحك من FMP بعد التسجيل
+      const PROXY = "https://sec-proxy.vercel.app/api/sec-proxy"; // بروكسيك
+      const FMP_KEY = "pIugzfG67qw0hwcFvzzSzF2Zax1eZXt6"; // ← استبدله بمفتاحك من FMP
 
       const LIMITS = { MAX_DTA: 0.30, MAX_CTA: 0.30, MAX_IMPURE: 0.05 };
       const BANNED = [
@@ -54,7 +54,7 @@
       const pct = x => (typeof x === "number" ? (x*100).toFixed(2) + "%" : "-");
       const sleep = ms => new Promise(r=>setTimeout(r,ms));
 
-      /* ===== مساعدات جلب من SEC عبر البروكسي ===== */
+      /* ===== SEC helpers عبر البروكسي ===== */
       async function fetchSEC(url, type="json", retries=4){
         let lastErr;
         for(let i=0;i<retries;i++){
@@ -70,38 +70,33 @@
 
       function pad10(cik){ let s=String(Math.trunc(Number(cik)||0)); while(s.length<10) s="0"+s; return s; }
       function safeDiv(a,b){ return (isFinite(a)&&isFinite(b)&&b!==0)?(a/b):0; }
-      function firstNZ(arr){ for(const x of arr){ if(isFinite(x)&&x>0) return x; } return 0; }
       function sum(arr){ return arr.reduce((s,x)=>s+(isFinite(x)?x:0),0); }
       function sumPos(arr){ return arr.reduce((s,x)=>s+(isFinite(x)&&x>0?x:0),0); }
 
-      // نختار "آخر ربع" 10-Q إن وجد، وإلا أحدث قيمة أيًا كان النموذج
-      function pickLatestQuarter(gaapNode){
-        if(!gaapNode || !gaapNode.units) return null;
-        const usd = gaapNode.units.USD || gaapNode.units.usd;
-        if(!usd) return null;
-
-        // نفصل 10-Q عن غيره
-        const q = usd.filter(e => (e.form||"").toUpperCase()==="10-Q");
-        const any = usd.slice();
-
-        const sortByEndDesc = (a,b)=> new Date(b.end||0) - new Date(a.end||0);
-
-        let candidate = null;
-        if(q.length){
-          candidate = q.sort(sortByEndDesc)[0];
-        } else if(any.length){
-          candidate = any.sort(sortByEndDesc)[0];
-        }
-        if(candidate && isFinite(Number(candidate.val))){
-          return { val:Number(candidate.val), form:candidate.form||"", end:candidate.end||"" };
-        }
-        return null;
+      // رجّع كل تواريخ الربع (من 10-Q) مرتبة تنازليًا، بدون تكرار
+      function listQuarterEnds(F){
+        const ends = new Set();
+        const collect = (node)=>{
+          if(!node||!node.units) return;
+          const usd = node.units.USD || node.units.usd; if(!usd) return;
+          usd.forEach(e=>{
+            if((e.form||"").toUpperCase()==="10-Q" && e.end) ends.add(e.end);
+          });
+        };
+        Object.values(F||{}).forEach(collect);
+        return Array.from(ends).sort((a,b)=>new Date(b)-new Date(a));
       }
 
-      function pickFromGaap(F, keys){
-        for (const k of keys) {
-          const p = pickLatestQuarter(F[k]);
-          if(p) return p;
+      // قراءة قيمة من مجموعة مفاتيح GAAP لربع محدد (end) ومن 10-Q
+      function pickForEnd(F, keys, end){
+        for(const k of keys){
+          const node = F[k]; if(!node||!node.units) continue;
+          const usd = node.units.USD || node.units.usd; if(!usd) continue;
+          // فضّل 10-Q لهذا التاريخ، وإن ما وجد قيّم نفس التاريخ حتى لو فورم مختلف
+          const exactQ = usd.find(e => (e.form||"").toUpperCase()==="10-Q" && e.end===end);
+          if(exactQ && isFinite(Number(exactQ.val))) return Number(exactQ.val);
+          const exactAny = usd.find(e => e.end===end);
+          if(exactAny && isFinite(Number(exactAny.val))) return Number(exactAny.val);
         }
         return null;
       }
@@ -132,10 +127,10 @@
         throw new Error("Ticker not found via SEC maps");
       }
 
-      /* ===== FMP (فصل ربعي) كبديل عند نقص SEC ===== */
-      async function fetchFromFMPQuarter(ticker){
+      /* ===== FMP (quarter) fallback: نجرب حتى 4 أرباع ونختار أول ربع مكتمل ===== */
+      async function fetchFromFMPQuarterRolling(ticker){
         const base = "https://financialmodelingprep.com/api/v3";
-        const qs = `?period=quarter&limit=1&apikey=${encodeURIComponent(FMP_KEY)}`;
+        const qs = `?period=quarter&limit=4&apikey=${encodeURIComponent(FMP_KEY)}`;
 
         const [bsRes, isRes] = await Promise.all([
           fetch(`${base}/balance-sheet-statement/${encodeURIComponent(ticker)}${qs}`),
@@ -145,25 +140,30 @@
 
         const bsArr = await bsRes.json();
         const isArr = await isRes.json();
-        const bs = Array.isArray(bsArr) && bsArr[0] ? bsArr[0] : {};
-        const is_ = Array.isArray(isArr) && isArr[0] ? isArr[0] : {};
 
-        const getNum = v => { const n=Number(v); return isFinite(n)?n:null; };
+        // نمشي على الأرباع من الأحدث للأقدم ونختار أول ربع فيه أصول + إيرادات
+        for(let i=0;i<4;i++){
+          const bs = bsArr[i] || {};
+          const is_ = isArr[i] || {};
+          const num = v => { const n=Number(v); return isFinite(n)?n:null; };
 
-        const assets = getNum(bs.totalAssets) ?? getNum(bs.totalAssetsUSD) ?? 0;
-        const debt   = (getNum(bs.totalDebt) ?? ((getNum(bs.shortTermDebt)||0)+(getNum(bs.longTermDebt)||0)) ) || 0;
-        const cash   = getNum(bs.cashAndShortTermInvestments) ?? ((getNum(bs.cashAndCashEquivalents)||0)+(getNum(bs.shortTermInvestments)||0)) || 0;
-        const revenue= getNum(is_.revenue) ?? getNum(is_.totalRevenue) ?? 0;
-        // نعدّ الإيراد غير المباح كفوائد مكتسبة إن وجدت
-        const interestIncome = Math.max(
-          0,
-          getNum(is_.interestIncome) ?? getNum(is_.interestIncomeNet) ?? getNum(is_.investmentIncome) ?? 0
-        );
+          const assets = num(bs.totalAssets) ?? num(bs.totalAssetsUSD) ?? null;
+          const debt   = (num(bs.totalDebt) ?? ((num(bs.shortTermDebt)||0)+(num(bs.longTermDebt)||0)) );
+          const cash   = (num(bs.cashAndShortTermInvestments) ?? ((num(bs.cashAndCashEquivalents)||0)+(num(bs.shortTermInvestments)||0)) );
+          const revenue= num(is_.revenue) ?? num(is_.totalRevenue) ?? null;
+          const interestIncome = Math.max(
+            0,
+            num(is_.interestIncome) ?? num(is_.interestIncomeNet) ?? num(is_.investmentIncome) ?? 0
+          );
 
-        return {
-          assets, debt, cash, revenue, interestIncome,
-          form: "FMP-Q", end: is_.date || bs.date || ""
-        };
+          if(assets>0 && revenue>0){
+            return {
+              assets, debt: debt||0, cash: cash||0, revenue, interestIncome: interestIncome||0,
+              form:"FMP-Q", end: is_.date || bs.date || ""
+            };
+          }
+        }
+        return null;
       }
 
       /* ===== العرض ===== */
@@ -177,8 +177,7 @@
 
         const rep = reportMeta ? `${reportMeta.form || ""} — ${reportMeta.end || ""}` : "";
         const noteLine = data.note ? data.note
-          : (data.status==="Mubah" ? "لا توجد بيانات ربعيّة كافية (IPO/اندماج). الأصل الإباحة حتى ظهور أول 10-Q."
-             : "");
+          : (data.status==="Mubah" ? "لا توجد بيانات ربعية مكتملة. رجعنا للقاعدة: الأصل الإباحة حتى يصدر 10-Q." : "");
 
         out.innerHTML = `
           <div class="card">
@@ -231,7 +230,7 @@
           let source = "SEC";
           const cik = await mapTickerToCik(t);
 
-          // فحص النشاط
+          // فحص النشاط (SIC)
           const submissions = await fetchSEC(`https://data.sec.gov/submissions/CIK${pad10(cik)}.json`);
           const sicDesc = (submissions.sicDescription || "").toLowerCase();
           const banned = BANNED.find(k => sicDesc.includes(k));
@@ -242,53 +241,61 @@
             return;
           }
 
-          // CompanyFacts (نحاول ربعي 10-Q)
+          // CompanyFacts: نجمع كل تواريخ الربع ثم نجربها واحد واحد
           let assets=null, debt=null, cash=null, revenue=null, interestIncome=0;
-          let form="", end="";
-
+          let form="10-Q", end="";
           try{
             const facts = await fetchSEC(`https://data.sec.gov/api/xbrl/companyfacts/CIK${pad10(cik)}.json`);
             const F = (facts.facts && facts.facts["us-gaap"]) ? facts.facts["us-gaap"] : {};
 
-            const pAssets  = pickFromGaap(F,["Assets"]);
-            const pDebt    = pickFromGaap(F,["Debt","InterestBearingLiabilities","Liabilities"]);
-            const pCashA   = pickFromGaap(F,["CashAndCashEquivalentsAtCarryingValue"]);
-            const pSTI     = pickFromGaap(F,["ShortTermInvestments"]);
-            const pRevenue = pickFromGaap(F,["Revenues","SalesRevenueNet","RevenueFromContractWithCustomerExcludingAssessedTax"]);
-            const pIntInc1 = pickFromGaap(F,["InterestIncome"]);
-            const pIntInc2 = pickFromGaap(F,["InterestAndDividendIncomeOperating"]);
-            const pIntInc3 = pickFromGaap(F,["InterestAndDividendIncome"]);
-            const pIntInc4 = pickFromGaap(F,["InterestIncomeNonoperating"]);
-            const pIntInc5 = pickFromGaap(F,["InvestmentIncomeInterest"]);
+            const ends = listQuarterEnds(F); // [الأحدث ← الأقدم]
+            // لو ما فيه 10-Q نهائيًا، نجرب أي تواريخ لأي فورم (آخرًا ثم الذي قبله)
+            const anyEnds = ()=>{
+              const s = new Set();
+              Object.values(F||{}).forEach(node=>{
+                if(node?.units){
+                  const usd=node.units.USD||node.units.usd;
+                  (usd||[]).forEach(e=>{ if(e.end) s.add(e.end); });
+                }
+              });
+              return Array.from(s).sort((a,b)=>new Date(b)-new Date(a));
+            };
 
-            // نأخذ آخر ربع (لو نفس الربع لعدة عناصر نستخدم الأحدث)
-            const allMeta = [pAssets,pDebt,pCashA,pSTI,pRevenue].filter(Boolean).sort((a,b)=>new Date(b.end||0)-new Date(a.end||0));
-            if(allMeta[0]){ form = allMeta[0].form || ""; end = allMeta[0].end || ""; }
+            const tryEnds = ends.length ? ends : anyEnds();
 
-            assets  = pAssets?.val ?? null;
-            debt    = pDebt?.val ?? null;
-            cash    = (pCashA?.val||0) + (pSTI?.val||0);
-            revenue = pRevenue?.val ?? null;
-            interestIncome = sumPos([
-              pIntInc1?.val||0, pIntInc2?.val||0, pIntInc3?.val||0, pIntInc4?.val||0, pIntInc5?.val||0
-            ]);
+            for(const e of tryEnds){
+              const a = pickForEnd(F,["Assets"], e);
+              const d = pickForEnd(F,["Debt","InterestBearingLiabilities","Liabilities"], e);
+              const c1= pickForEnd(F,["CashAndCashEquivalentsAtCarryingValue"], e) || 0;
+              const c2= pickForEnd(F,["ShortTermInvestments"], e) || 0;
+              const r = pickForEnd(F,["Revenues","SalesRevenueNet","RevenueFromContractWithCustomerExcludingAssessedTax"], e);
+              const i1= pickForEnd(F,["InterestIncome"], e) || 0;
+              const i2= pickForEnd(F,["InterestAndDividendIncomeOperating"], e) || 0;
+              const i3= pickForEnd(F,["InterestAndDividendIncome"], e) || 0;
+              const i4= pickForEnd(F,["InterestIncomeNonoperating"], e) || 0;
+              const i5= pickForEnd(F,["InvestmentIncomeInterest"], e) || 0;
+
+              if(a>0 && r>0){
+                assets=a; debt=(d||0); cash=(c1+c2); revenue=r;
+                interestIncome=sumPos([i1,i2,i3,i4,i5]);
+                end=e; // هذا الربع المعتمد
+                break;
+              }
+            }
           }catch(_){}
 
-          // إذا ما لقينا بيانات ربعية كافية → جرّب FMP ربعي
+          // لو ما لقينا ربع مكتمل في SEC → FMP (آخر 4 أرباع) بنفس منطق العودة للخلف
           if(!(assets>0 && revenue>0)){
-            const f = await fetchFromFMPQuarter(t);
-            assets = assets || f.assets;
-            debt = (debt ?? 0) || f.debt;
-            cash = (cash ?? 0) || f.cash;
-            revenue = revenue || f.revenue;
-            interestIncome = interestIncome || f.interestIncome || 0;
-            form = f.form; end = f.end;
-            source = "FMP (quarter)";
+            const f = await fetchFromFMPQuarterRolling(t);
+            if(f){
+              assets=f.assets; debt=f.debt; cash=f.cash; revenue=f.revenue; interestIncome=f.interestIncome;
+              form=f.form; end=f.end; source="FMP (quarter)";
+            }
           }
 
-          // إذا لا SEC ولا FMP جابوا بيانات ربعيّة → مباح (غير مؤكد)
+          // إذا لا SEC ولا FMP وفرت ربع مكتمل → مباح (غير مؤكد)
           if(!(assets>0 && revenue>0)){
-            render(t, cik, {dta:null, cta:null, irr:null, status:"Mubah", note:"No recent quarterly data (IPO/merger)."}, source, {form, end});
+            render(t, cik, {dta:null, cta:null, irr:null, status:"Mubah", note:"No complete quarterly data found."}, source, {form:"", end:""});
             return;
           }
 
