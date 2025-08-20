@@ -3,31 +3,32 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>أداة فحص شرعية الأسهم (ربع سنوي)</title>
+    <title>فحص شرعي (ربع سنوي) — للمضارب</title>
     <style>
-      body{font-family:system-ui,Segoe UI,Tahoma,Arial,sans-serif;max-width:920px;margin:40px auto;padding:16px}
+      :root{color-scheme:light dark}
+      body{font-family:system-ui,Segoe UI,Tahoma,Arial,sans-serif;max-width:900px;margin:40px auto;padding:16px}
+      h1{font-size:28px;margin:0 0 8px}
       .row{display:flex;gap:8px;margin:12px 0}
-      input{flex:1;padding:10px 12px;border:1px solid #ddd;border-radius:10px;text-transform:uppercase}
-      button{padding:10px 16px;border-radius:10px;border:1px solid #111;background:#111;color:#fff;cursor:pointer}
-      .card{border:1px solid #eee;border-radius:12px;padding:16px;margin-top:12px}
-      .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:16px}
-      .tile{border:1px solid #f1f1f1;border-radius:10px;padding:12px}
-      .k{opacity:.7;font-size:12px}
-      .v{font-size:20px;font-weight:700}
+      input{flex:1;padding:12px;border:1px solid #ddd;border-radius:12px;text-transform:uppercase}
+      button{padding:12px 16px;border-radius:12px;border:1px solid #111;background:#111;color:#fff;cursor:pointer}
+      .card{border:1px solid #eee;border-radius:14px;padding:16px;margin-top:12px}
+      .row-top{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+      .source{font-size:12px;opacity:.75;margin-inline-start:8px}
       .badge{padding:6px 10px;border-radius:16px;font-weight:700}
       .ok{background:#e6f7e9;color:#167c2b}
       .bad{background:#fde8e8;color:#b00020}
       .warn{background:#fff8e1;color:#a67c00}
       .neutral{background:#e9f2ff;color:#0a53a3}
+      .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:12px}
+      .tile{border:1px solid #f1f1f1;border-radius:12px;padding:12px}
+      .k{opacity:.7;font-size:12px}
+      .v{font-size:20px;font-weight:800}
       .muted{opacity:.65;font-size:12px;margin-top:10px}
       .err{color:#b00020;margin-top:8px}
-      .source{font-size:12px;opacity:.75;margin-inline-start:8px}
-      .row-top{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
-      .note{font-size:12px;opacity:.8}
     </style>
   </head>
   <body>
-    <h1>أداة فحص شرعية الأسهم (ربع سنوي)</h1>
+    <h1>فحص شرعي (ربع سنوي)</h1>
 
     <div class="row">
       <input id="ticker" placeholder="AAPL, TSLA, MSFT ..." />
@@ -38,31 +39,30 @@
     <div id="out"></div>
 
     <script>
-      /* ================= إعدادات عامة ================= */
-      const PROXY   = "https://sec-proxy.vercel.app/api/sec-proxy"; // بروكسي SEC
-      const FMP_KEY = "pIugzfG67qw0hwcFvzzSzF2Zax1eZXt6";           // مفتاح FMP
+      /* إعدادات */
+      const PROXY   = "https://sec-proxy.vercel.app/api/sec-proxy";   // بروكسي SEC
+      const FMP_KEY = "pIugzfG67qw0hwcFvzzSzF2Zax1eZXt6";             // مفتاح FMP
 
-      // المنهجية الحالية: على الأصول (كما طلبت سابقاً)
+      // حدود المضارب: آخر ربع فقط — الدين ≤30%، النقدية ≤30%، الدخل غير المباح ≤5%
       const LIMITS = { MAX_DTA: 0.30, MAX_CTA: 0.30, MAX_IMPURE: 0.05 };
 
-      // أنشطة ممنوعة مباشرة (SIC)
+      // أنشطة ممنوعة فوراً (سريعة لمضارب)
       const BANNED = [
         "alcohol","brewery","wine","spirits","gambling","casino","lottery",
         "pork","swine","pig","tobacco","cannabis","adult","porn",
         "bank","banking","mortgage","insurance","reinsurance","weapons","firearms","defense"
       ];
 
-      const pct   = x => (typeof x === "number" ? (x*100).toFixed(2) + "%" : "-");
+      const pct = x => (typeof x === "number" ? (x*100).toFixed(2) + "%" : "-");
       const sleep = ms => new Promise(r=>setTimeout(r,ms));
       const safeDiv = (a,b)=> (isFinite(a)&&isFinite(b)&&b!==0)?(a/b):0;
       const sumPos  = arr => arr.reduce((s,x)=>s+(isFinite(x)&&x>0?x:0),0);
 
-      /* ================= SEC عبر بروكسي ================= */
       async function fetchSEC(url, type="json", retries=4){
         let lastErr;
         for(let i=0;i<retries;i++){
           try{
-            await sleep(250 + i*600);
+            await sleep(200 + i*400);
             const r = await fetch(PROXY + "?u=" + encodeURIComponent(url), {cache:"no-store"});
             if(!r.ok) throw new Error("SEC HTTP "+r.status);
             return (type==="text") ? await r.text() : await r.json();
@@ -96,10 +96,9 @@
         const a2 = Array.isArray(j2)?j2:Object.values(j2||{});
         const h2 = a2.find(o => (o.ticker||"").toUpperCase()===ticker.toUpperCase());
         if(h2) return Number(h2.cik_str || h2.cik);
-        throw new Error("تعذّر إيجاد CIK لهذا الرمز عبر SEC");
+        throw new Error("تعذّر إيجاد CIK لهذا الرمز.");
       }
 
-      /* ========= آخر ربعين 10-Q من CompanyFacts ========= */
       function lastTwoQuarterEnds(F){
         const ends = new Set();
         Object.values(F||{}).forEach(node=>{
@@ -113,7 +112,6 @@
         return sorted.slice(0,2);
       }
 
-      // قراءة قيمة من مجموعة مفاتيح لنهاية ربع
       function pickForEnd(F, keys, end){
         for(const k of keys){
           const node = F[k]; if(!node||!node.units) continue;
@@ -126,7 +124,7 @@
         return null;
       }
 
-      // مفاتيح الدين الربوي فقط (لا نستخدم Liabilities إطلاقًا)
+      // مفاتيح الدين الربوي فقط — لا نستخدم Liabilities
       const DEBT_KEYS_SEC = [
         "Debt",
         "LongTermDebt",
@@ -143,47 +141,29 @@
       function tryPickQuarterSEC(F, ends){
         for(const end of ends){
           const assets  = pickForEnd(F,["Assets"], end);
-
-          // الدين = مجموع عناصر الدين الربوي فقط
-          const debtParts = DEBT_KEYS_SEC.map(k=>pickForEnd(F,[k], end) || 0);
-          const debt = sumPos(debtParts);
-
-          // النقدية + الاستثمارات القصيرة
-          const cash1   = pickForEnd(F,["CashAndCashEquivalentsAtCarryingValue"], end) || 0;
-          const cash2   = pickForEnd(F,["ShortTermInvestments"], end) || 0;
-
-          // الإيرادات
+          const debt    = sumPos(DEBT_KEYS_SEC.map(k=>pickForEnd(F,[k], end) || 0));
+          const cash    = (pickForEnd(F,["CashAndCashEquivalentsAtCarryingValue"], end) || 0)
+                        + (pickForEnd(F,["ShortTermInvestments"], end) || 0);
           const revenue = pickForEnd(F,[
-            "Revenues",
-            "SalesRevenueNet",
+            "Revenues","SalesRevenueNet",
             "RevenueFromContractWithCustomerExcludingAssessedTax",
-            "SalesRevenueGoodsNet",
-            "SalesRevenueServicesNet"
+            "SalesRevenueGoodsNet","SalesRevenueServicesNet"
           ], end);
-
-          // دخل الفوائد (لدخل غير مباح)
-          const i1 = pickForEnd(F,["InterestIncome"], end) || 0;
-          const i2 = pickForEnd(F,["InterestAndDividendIncomeOperating"], end) || 0;
-          const i3 = pickForEnd(F,["InterestAndDividendIncome"], end) || 0;
-          const i4 = pickForEnd(F,["InterestIncomeNonoperating"], end) || 0;
-          const i5 = pickForEnd(F,["InvestmentIncomeInterest"], end) || 0;
+          const interestIncome = sumPos([
+            pickForEnd(F,["InterestIncome"], end) || 0,
+            pickForEnd(F,["InterestAndDividendIncomeOperating"], end) || 0,
+            pickForEnd(F,["InterestAndDividendIncome"], end) || 0,
+            pickForEnd(F,["InterestIncomeNonoperating"], end) || 0,
+            pickForEnd(F,["InvestmentIncomeInterest"], end) || 0
+          ]);
 
           if(assets>0 && revenue>0){
-            return {
-              assets,
-              debt,
-              cash: (cash1+cash2),
-              revenue,
-              interestIncome: sumPos([i1,i2,i3,i4,i5]),
-              form: "10-Q",
-              end
-            };
+            return { assets, debt, cash, revenue, interestIncome, form:"10-Q", end };
           }
         }
         return null;
       }
 
-      /* ================= FMP (fallback لآخر ربعين فقط) ================= */
       async function fetchFromFMP_Q_LastTwo(ticker){
         const base = "https://financialmodelingprep.com/api/v3";
         const qs   = `?period=quarter&limit=2&datatype=json&apikey=${encodeURIComponent(FMP_KEY)}`;
@@ -203,7 +183,6 @@
           const num = v=>{const n=Number(v); return isFinite(n)?n:null;};
 
           const assets = num(B.totalAssets) ?? num(B.totalAssetsUSD) ?? null;
-          // عناصر الدين الربوي من FMP
           const debt   = (num(B.totalDebt) ??
                          ((num(B.shortTermDebt)||0) + (num(B.longTermDebt)||0)) ??
                          ((num(B.longTermDebtNoncurrent)||0) + (num(B.shortTermBorrowings)||0)));
@@ -213,97 +192,78 @@
           const interestIncome = Math.max(0, num(I.interestIncome) ?? num(I.interestIncomeNet) ?? num(I.investmentIncome) ?? 0);
 
           if(assets>0 && revenue>0){
-            return {
-              assets,
-              debt: debt||0,
-              cash: cash||0,
-              revenue,
-              interestIncome: interestIncome||0,
-              form: "FMP-Q",
-              end: I.date || B.date || ""
-            };
+            return { assets, debt:debt||0, cash:cash||0, revenue, interestIncome:interestIncome||0, form:"FMP-Q", end: I.date||B.date||"" };
           }
         }
         return null;
       }
 
-      /* ================= قرار الحكم ================= */
       function decideStatus(dta, cta, irr){
         const debtOk = isFinite(dta) && dta <= LIMITS.MAX_DTA;
         const cashOk = isFinite(cta) && cta <= LIMITS.MAX_CTA;
 
         if(!debtOk || !cashOk){
           const reasons=[];
-          if(!debtOk) reasons.push(`نسبة الدين إلى الأصول أعلى من ${(LIMITS.MAX_DTA*100).toFixed(0)}%`);
-          if(!cashOk) reasons.push(`نسبة النقدية إلى الأصول أعلى من ${(LIMITS.MAX_CTA*100).toFixed(0)}%`);
-          if(irr > LIMITS.MAX_IMPURE) reasons.push(`دخل غير مباح ${(irr*100).toFixed(2)}% > ${(LIMITS.MAX_IMPURE*100).toFixed(0)}%`);
+          if(!debtOk) reasons.push(`الدين/الأصول > ${(LIMITS.MAX_DTA*100).toFixed(0)}%`);
+          if(!cashOk) reasons.push(`النقدية/الأصول > ${(LIMITS.MAX_CTA*100).toFixed(0)}%`);
+          if(irr > LIMITS.MAX_IMPURE) reasons.push(`الدخل غير المباح ${(irr*100).toFixed(2)}%`);
           return { status:"حرام", note: reasons.join(" | ") };
         }
         if(irr===0) return { status:"حلال", note:"" };
-        if(irr>0 && irr<=LIMITS.MAX_IMPURE) return { status:"يحتاج تطهير", note:`نسبة التطهير = ${(irr*100).toFixed(2)}% من الأرباح.` };
-        return { status:"حرام", note:`دخل غير مباح ${(irr*100).toFixed(2)}% > ${(LIMITS.MAX_IMPURE*100).toFixed(0)}%.` };
+        if(irr>0 && irr<=LIMITS.MAX_IMPURE) return { status:"حلال (يحتاج تطهير)", note:`نسبة التطهير = ${(irr*100).toFixed(2)}% من الأرباح.` };
+        return { status:"حرام", note:`الدخل غير المباح ${(irr*100).toFixed(2)}%` };
       }
 
-      /* ================= عرض النتيجة ================= */
       function render(t, cik, data, source, reportMeta){
         const out = document.getElementById("out");
         const cls =
-          data.status==="حلال" ? "ok" :
+          data.status.startsWith("حلال") ? "ok" :
           data.status==="حرام" ? "bad" :
-          data.status==="يحتاج تطهير" ? "warn" :
           "neutral"; // مباح
-
-        const rep = reportMeta ? `${reportMeta.form || ""} — ${reportMeta.end || ""}` : "";
-        const noteLine = data.note ? data.note
-          : (data.status==="مباح" ? "لا توجد بيانات ربع سنوية مكتملة (آخر ربع أو الذي قبله). الأصل الإباحة حتى صدور 10-Q." : "");
 
         out.innerHTML = `
           <div class="card">
             <div class="row-top">
               <div>
-                <div style="font-size:18px;font-weight:600">${t} — CIK ${String(cik).padStart(10,"0")}
+                <div style="font-size:18px;font-weight:700">${t} — CIK ${String(cik).padStart(10,"0")}
                   <span class="source">المصدر: ${source}</span>
                 </div>
-                <div class="note">${rep}</div>
+                <div class="source">Q — ${reportMeta.end || ""}</div>
               </div>
               <span class="badge ${cls}">${data.status}</span>
             </div>
 
             <div class="grid">
-              <div class="tile"><div class="k">الدخل غير المباح</div><div class="v">${pct(data.irr)}</div></div>
+              <div class="tile"><div class="k">الدَّخْل غير المباح</div><div class="v">${pct(data.irr)}</div></div>
               <div class="tile"><div class="k">النقدية / الأصول</div><div class="v">${pct(data.cta)}</div></div>
               <div class="tile"><div class="k">الدين / الأصول</div><div class="v">${pct(data.dta)}</div></div>
             </div>
 
-            <div class="muted">${noteLine}</div>
+            ${data.note ? `<div class="muted">${data.note}</div>` : ``}
             <div class="muted">المعايير: الدين ≤ 30%، النقدية ≤ 30%، الدخل غير المباح ≤ 5%.</div>
           </div>`;
       }
 
-      /* ================= الحدث الرئيسي ================= */
       document.getElementById("btn").onclick = async () => {
         const t = document.getElementById("ticker").value.trim().toUpperCase();
         const out = document.getElementById("out");
         const err = document.getElementById("error");
         err.textContent = ""; out.innerHTML = "";
-        if(!t){ err.textContent = "اكتب رمز السهم أولاً"; return; }
+        if(!t){ err.textContent = "اكتب رمز السهم أولًا"; return; }
 
         try{
           let source = "SEC";
           const cik = await mapTickerToCik(t);
 
-          // 1) فحص النشاط (SIC): تحريم مباشر للنشاطات المستبعدة
+          // نشاط محرّم (SIC) = تحريم فوري
           const submissions = await fetchSEC(`https://data.sec.gov/submissions/CIK${pad10(cik)}.json`);
           const sicDesc = (submissions.sicDescription || "").toLowerCase();
-          const banned = BANNED.find(k => sicDesc.includes(k));
-          if (banned){
-            render(t, cik, {dta:null, cta:null, irr:null, status:"حرام",
-              note:`نشاط مستبعد: ${submissions.sic || ""} ${submissions.sicDescription||""}`},
-              source, {form:"SIC", end:""});
+          if (BANNED.find(k => sicDesc.includes(k))){
+            render(t, cik, {dta:null, cta:null, irr:null, status:"حرام", note:`نشاط مستبعد: ${submissions.sicDescription||""}`}, source, {end:""});
             return;
           }
 
-          // 2) CompanyFacts: نجرب آخر ربع ثم السابق فقط
+          // SEC: آخر ربع ثم السابق فقط
           let picked = null;
           try{
             const facts = await fetchSEC(`https://data.sec.gov/api/xbrl/companyfacts/CIK${pad10(cik)}.json`);
@@ -312,25 +272,25 @@
             picked = tryPickQuarterSEC(F, ends);
           }catch(_){}
 
-          // 3) لو SEC ناقص → FMP (آخر ربعين)
+          // FMP لو SEC ناقص
           if(!picked){
             const f = await fetchFromFMP_Q_LastTwo(t);
             if(f){ picked = {...f}; source = "FMP (quarter)"; }
           }
 
-          // 4) إذا لا SEC ولا FMP → مباح
+          // لا SEC ولا FMP → مباح (نقص بيانات)
           if(!picked){
-            render(t, cik, {dta:null, cta:null, irr:null, status:"مباح", note:"تعذّر إيجاد بيانات ربع سنوية مكتملة."}, source, {form:"", end:""});
+            render(t, cik, {dta:null, cta:null, irr:null, status:"مباح", note:"بيانات الربع غير مكتملة."}, source, {end:""});
             return;
           }
 
-          // 5) حساب النِسب والقرار
+          // حساب النِّسَب
           const dta = safeDiv(picked.debt||0, picked.assets||1);
           const cta = safeDiv(picked.cash||0, picked.assets||1);
           const irr = Math.min(1, safeDiv(picked.interestIncome||0, picked.revenue||1));
 
           const decision = decideStatus(dta, cta, irr);
-          render(t, cik, {dta, cta, irr, status:decision.status, note:decision.note}, source, {form:picked.form, end:picked.end});
+          render(t, cik, {dta, cta, irr, status:decision.status, note:decision.note}, source, {end:picked.end});
         }catch(e){
           document.getElementById("error").textContent = "خطأ: " + (e.message || e);
         }
