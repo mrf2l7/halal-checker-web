@@ -23,17 +23,32 @@
       .err{color:#b00020;margin-top:8px}
       .source{font-size:12px;opacity:.7;margin-inline-start:8px}
       .row-top{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
-      .hint{opacity:.75;margin:0 0 8px 0}
       .note{font-size:12px;opacity:.75}
+
+      /* بانر سياسة البيانات — واضح وثابت */
+      .notice{
+        background:#f5f7ff;
+        border:1px solid #dfe7ff;
+        color:#0a2a66;
+        padding:12px 14px;
+        border-radius:12px;
+        line-height:1.8;
+        margin:12px 0 16px;
+        font-size:14px;
+      }
+      .notice b{color:#06245a}
     </style>
   </head>
   <body>
     <h1>Halal Stock Checker (SEC)</h1>
-    <p class="hint">
-      الأولوية: بيانات SEC الربعية (10-Q) عبر بروكسيك على Vercel.
-      إذا كان آخر ربع ناقص نرجع للربع السابق تلقائيًا. لو SEC ناقص بالكامل نحاول FMP (quarter).
+
+    <!-- بانر السياسة (السطر اللي كان ما يطلع) -->
+    <div class="notice">
+      <b>الأولوية:</b> بيانات SEC الربعية (10-Q) عبر بروكسيك على Vercel.
+      إذا كان آخر ربع ناقص نرجع للربع السابق تلقائيًا.
+      لو كانت بيانات SEC ناقصة بالكامل نحاول <b>FMP (quarter)</b>.
       إن تعذّر: <b>Mubah</b>.
-    </p>
+    </div>
 
     <div class="row">
       <input id="ticker" placeholder="AAPL, TSLA, MSFT ..." />
@@ -45,10 +60,8 @@
 
     <script>
       /* ===== إعدادات ===== */
-      // بروكسيك السابق لتمرير طلبات SEC
-      const PROXY = "https://sec-proxy.vercel.app/api/sec-proxy";
-      // مفتاح FMP الذي أرسلته:
-      const FMP_KEY = "pIugzfG67qw0hwcFvzzSzF2Zax1eZXt6";
+      const PROXY = "https://sec-proxy.vercel.app/api/sec-proxy"; // بروكسي SEC
+      const FMP_KEY = "pIugzfG67qw0hwcFvzzSzF2Zax1eZXt6";        // مفتاح FMP
 
       const LIMITS = { MAX_DTA: 0.30, MAX_CTA: 0.30, MAX_IMPURE: 0.05 };
       const BANNED = [
@@ -60,7 +73,7 @@
       const pct = x => (typeof x === "number" ? (x*100).toFixed(2) + "%" : "-");
       const sleep = ms => new Promise(r=>setTimeout(r,ms));
 
-      /* ===== SEC helpers عبر البروكسي ===== */
+      /* ===== SEC helpers ===== */
       async function fetchSEC(url, type="json", retries=4){
         let lastErr;
         for(let i=0;i<retries;i++){
@@ -78,7 +91,7 @@
       function safeDiv(a,b){ return (isFinite(a)&&isFinite(b)&&b!==0)?(a/b):0; }
       function sumPos(arr){ return arr.reduce((s,x)=>s+(isFinite(x)&&x>0?x:0),0); }
 
-      // رجّع كل تواريخ الربع (من 10-Q) مرتبة تنازليًا
+      // كل تواريخ 10-Q (أحدث ← أقدم)
       function listQuarterEnds(F){
         const ends = new Set();
         const collect = (node)=>{
@@ -92,7 +105,7 @@
         return Array.from(ends).sort((a,b)=>new Date(b)-new Date(a));
       }
 
-      // قراءة قيمة من مجموعة مفاتيح GAAP لربع محدد
+      // قيمة مفتاح GAAP محدد لنهاية ربع معينة
       function pickForEnd(F, keys, end){
         for(const k of keys){
           const node = F[k]; if(!node||!node.units) continue;
@@ -131,7 +144,7 @@
         throw new Error("Ticker not found via SEC maps");
       }
 
-      /* ===== FMP (quarter) fallback: لا ترمي أخطاء — ارجع null عند الفشل ===== */
+      /* ===== FMP fallback (quarter) — لا ترمي أخطاء ===== */
       async function fetchFromFMPQuarterRolling(ticker){
         const base = "https://financialmodelingprep.com/api/v3";
         const qs = `?period=quarter&limit=4&datatype=json&apikey=${encodeURIComponent(FMP_KEY)}`;
@@ -143,15 +156,9 @@
             fetch(`${base}/income-statement/${encodeURIComponent(ticker)}${qs}`)
           ]);
 
-          if (bsRes.status === "fulfilled" && bsRes.value.ok) {
-            bsArr = await bsRes.value.json();
-          }
-          if (isRes.status === "fulfilled" && isRes.value.ok) {
-            isArr = await isRes.value.json();
-          }
-        } catch(_) {
-          // تجاهل أي استثناءات شبكة — سنرجع null بالأسفل
-        }
+          if (bsRes.status === "fulfilled" && bsRes.value.ok) bsArr = await bsRes.value.json();
+          if (isRes.status === "fulfilled" && isRes.value.ok) isArr = await isRes.value.json();
+        } catch(_) {}
 
         if (!Array.isArray(bsArr)) bsArr = [];
         if (!Array.isArray(isArr)) isArr = [];
@@ -165,19 +172,12 @@
           const debt   = (num(bs.totalDebt) ?? ((num(bs.shortTermDebt)||0) + (num(bs.longTermDebt)||0)));
           const cash   = (num(bs.cashAndShortTermInvestments) ?? ((num(bs.cashAndCashEquivalents)||0) + (num(bs.shortTermInvestments)||0)));
           const revenue= num(is_.revenue) ?? num(is_.totalRevenue) ?? null;
-          const interestIncome = Math.max(
-            0,
-            num(is_.interestIncome) ?? num(is_.interestIncomeNet) ?? num(is_.investmentIncome) ?? 0
-          );
+          const interestIncome = Math.max(0, num(is_.interestIncome) ?? num(is_.interestIncomeNet) ?? num(is_.investmentIncome) ?? 0);
 
           if (assets > 0 && revenue > 0) {
             return {
-              assets,
-              debt: debt || 0,
-              cash: cash || 0,
-              revenue,
-              interestIncome: interestIncome || 0,
-              form: "FMP-Q",
+              assets, debt: debt || 0, cash: cash || 0, revenue,
+              interestIncome: interestIncome || 0, form: "FMP-Q",
               end: is_.date || bs.date || ""
             };
           }
@@ -313,7 +313,7 @@
             }
           }catch(_){}
 
-          // لو SEC ما عطانا ربع مكتمل → FMP (بدون أخطاء)
+          // لو SEC ما عطانا ربع مكتمل → FMP
           if(!(assets>0 && revenue>0)){
             const f = await fetchFromFMPQuarterRolling(t);
             if(f){
@@ -322,7 +322,7 @@
             }
           }
 
-          // إذا لا SEC ولا FMP وفرت ربع مكتمل → Mubah
+          // إن لم تتوفر بيانات مكتملة → Mubah
           if(!(assets>0 && revenue>0)){
             render(t, cik, {dta:null, cta:null, irr:null, status:"Mubah", note:"No complete quarterly data found."}, source, {form:"", end:""});
             return;
