@@ -43,12 +43,13 @@
     <h1>Halal Stock Checker (SEC)</h1>
 
     <!-- بانر السياسة (السطر اللي كان ما يطلع) -->
-    <div class="notice">
-      <b>الأولوية:</b> بيانات SEC الربعية (10-Q) عبر بروكسيك على Vercel.
-      إذا كان آخر ربع ناقص نرجع للربع السابق تلقائيًا.
-      لو كانت بيانات SEC ناقصة بالكامل نحاول <b>FMP (quarter)</b>.
-      إن تعذّر: <b>Mubah</b>.
-    </div>
+  <div class="notice" style="display:none;">
+  <b>الأولوية:</b> بيانات SEC الربعية (10-Q) عبر بروكسيك على Vercel.
+  إذا كان آخر ربع ناقص نرجع للربع السابق تلقائيًا.
+  لو كانت بيانات SEC ناقصة بالكامل نحاول <b>FMP (quarter)</b>.
+  إن تعذّر: <b>Mubah</b>.
+</div>
+
 
     <div class="row">
       <input id="ticker" placeholder="AAPL, TSLA, MSFT ..." />
