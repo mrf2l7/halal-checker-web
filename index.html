@@ -24,13 +24,10 @@
       .source{font-size:12px;opacity:.75;margin-inline-start:8px}
       .row-top{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
       .note{font-size:12px;opacity:.8}
-      .hint{opacity:.8;margin:0 0 8px 0}
     </style>
   </head>
   <body>
     <h1>أداة فحص شرعية الأسهم (ربع سنوي)</h1>
-
-    <p class="hint">اكتب رمز السهم (مثل: AAPL) واضغط فحص. المنطق: آخر ربع 10-Q → إن ناقص نرجع للربع السابق فقط → إن ناقصين نحاول FMP → إن تعذّر: <b>مباح</b>.</p>
 
     <div class="row">
       <input id="ticker" placeholder="AAPL, TSLA, MSFT ..." />
@@ -42,12 +39,10 @@
 
     <script>
       /* ================= إعدادات عامة ================= */
-      // بروكسيك لتمرير طلبات SEC
-      const PROXY   = "https://sec-proxy.vercel.app/api/sec-proxy";
-      // مفتاح FMP الذي زوّدتني به
-      const FMP_KEY = "pIugzfG67qw0hwcFvzzSzF2Zax1eZXt6";
+      const PROXY   = "https://sec-proxy.vercel.app/api/sec-proxy"; // بروكسي SEC
+      const FMP_KEY = "pIugzfG67qw0hwcFvzzSzF2Zax1eZXt6";           // مفتاح FMP
 
-      // حدود الفحص
+      // المنهجية الحالية: على الأصول (كما طلبت سابقاً)
       const LIMITS = { MAX_DTA: 0.30, MAX_CTA: 0.30, MAX_IMPURE: 0.05 };
 
       // أنشطة ممنوعة مباشرة (SIC)
@@ -57,13 +52,12 @@
         "bank","banking","mortgage","insurance","reinsurance","weapons","firearms","defense"
       ];
 
-      // أدوات مساعدة بسيطة
       const pct   = x => (typeof x === "number" ? (x*100).toFixed(2) + "%" : "-");
       const sleep = ms => new Promise(r=>setTimeout(r,ms));
       const safeDiv = (a,b)=> (isFinite(a)&&isFinite(b)&&b!==0)?(a/b):0;
       const sumPos  = arr => arr.reduce((s,x)=>s+(isFinite(x)&&x>0?x:0),0);
 
-      /* ================= جلب من SEC (عبر بروكسي) ================= */
+      /* ================= SEC عبر بروكسي ================= */
       async function fetchSEC(url, type="json", retries=4){
         let lastErr;
         for(let i=0;i<retries;i++){
@@ -80,7 +74,6 @@
       function pad10(cik){ let s=String(Math.trunc(Number(cik)||0)); while(s.length<10) s="0"+s; return s; }
 
       async function mapTickerToCik(ticker){
-        // نحاول 3 مسارات رسمية من SEC للربط بين Ticker ← CIK
         try{
           const txt = await fetchSEC("https://www.sec.gov/include/ticker.txt","text");
           const hit = txt.split(/\r?\n/).find(line => {
@@ -106,9 +99,7 @@
         throw new Error("تعذّر إيجاد CIK لهذا الرمز عبر SEC");
       }
 
-      /* ================= استخراج آخر ربعين من SEC =================
-         نرجّع مصفوفة تواريخ [الربع الأحدث, الربع السابق] إن وجدت
-      ===============================================================*/
+      /* ========= آخر ربعين 10-Q من CompanyFacts ========= */
       function lastTwoQuarterEnds(F){
         const ends = new Set();
         Object.values(F||{}).forEach(node=>{
@@ -119,10 +110,10 @@
           });
         });
         const sorted = Array.from(ends).sort((a,b)=>new Date(b)-new Date(a));
-        return sorted.slice(0,2); // فقط آخر ربع وآخر ربع قبله
+        return sorted.slice(0,2);
       }
 
-      // نقرأ قيمة عنصر GAAP محدد لتاريخ ربع محدد (نفضّل 10-Q لذلك التاريخ)
+      // قراءة قيمة من مجموعة مفاتيح لنهاية ربع
       function pickForEnd(F, keys, end){
         for(const k of keys){
           const node = F[k]; if(!node||!node.units) continue;
@@ -135,19 +126,47 @@
         return null;
       }
 
-      // محاولة استخراج ربع مكتمل من SEC: نجرب الأحدث ثم السابق
+      // مفاتيح الدين الربوي فقط (لا نستخدم Liabilities إطلاقًا)
+      const DEBT_KEYS_SEC = [
+        "Debt",
+        "LongTermDebt",
+        "LongTermDebtNoncurrent",
+        "DebtCurrent",
+        "ShortTermBorrowings",
+        "CommercialPaper",
+        "LongTermDebtAndCapitalLeaseObligations",
+        "LongTermBorrowings",
+        "NotesPayable",
+        "Borrowings"
+      ];
+
       function tryPickQuarterSEC(F, ends){
         for(const end of ends){
           const assets  = pickForEnd(F,["Assets"], end);
-          const debt    = pickForEnd(F,["Debt","InterestBearingLiabilities","Liabilities"], end) || 0;
+
+          // الدين = مجموع عناصر الدين الربوي فقط
+          const debtParts = DEBT_KEYS_SEC.map(k=>pickForEnd(F,[k], end) || 0);
+          const debt = sumPos(debtParts);
+
+          // النقدية + الاستثمارات القصيرة
           const cash1   = pickForEnd(F,["CashAndCashEquivalentsAtCarryingValue"], end) || 0;
           const cash2   = pickForEnd(F,["ShortTermInvestments"], end) || 0;
-          const revenue = pickForEnd(F,["Revenues","SalesRevenueNet","RevenueFromContractWithCustomerExcludingAssessedTax"], end);
-          const i1      = pickForEnd(F,["InterestIncome"], end) || 0;
-          const i2      = pickForEnd(F,["InterestAndDividendIncomeOperating"], end) || 0;
-          const i3      = pickForEnd(F,["InterestAndDividendIncome"], end) || 0;
-          const i4      = pickForEnd(F,["InterestIncomeNonoperating"], end) || 0;
-          const i5      = pickForEnd(F,["InvestmentIncomeInterest"], end) || 0;
+
+          // الإيرادات
+          const revenue = pickForEnd(F,[
+            "Revenues",
+            "SalesRevenueNet",
+            "RevenueFromContractWithCustomerExcludingAssessedTax",
+            "SalesRevenueGoodsNet",
+            "SalesRevenueServicesNet"
+          ], end);
+
+          // دخل الفوائد (لدخل غير مباح)
+          const i1 = pickForEnd(F,["InterestIncome"], end) || 0;
+          const i2 = pickForEnd(F,["InterestAndDividendIncomeOperating"], end) || 0;
+          const i3 = pickForEnd(F,["InterestAndDividendIncome"], end) || 0;
+          const i4 = pickForEnd(F,["InterestIncomeNonoperating"], end) || 0;
+          const i5 = pickForEnd(F,["InvestmentIncomeInterest"], end) || 0;
 
           if(assets>0 && revenue>0){
             return {
@@ -177,15 +196,19 @@
           ]);
           if(a.status==="fulfilled" && a.value.ok) bs = await a.value.json();
           if(b.status==="fulfilled" && b.value.ok) is_ = await b.value.json();
-        }catch(_){ /* نتجاهل ونرجع null لاحقًا */ }
+        }catch(_){}
 
         for(let i=0;i<2;i++){
           const B = bs[i]||{}, I = is_[i]||{};
           const num = v=>{const n=Number(v); return isFinite(n)?n:null;};
 
           const assets = num(B.totalAssets) ?? num(B.totalAssetsUSD) ?? null;
-          const debt   = (num(B.totalDebt) ?? ((num(B.shortTermDebt)||0)+(num(B.longTermDebt)||0)));
-          const cash   = (num(B.cashAndShortTermInvestments) ?? ((num(B.cashAndCashEquivalents)||0)+(num(B.shortTermInvestments)||0)));
+          // عناصر الدين الربوي من FMP
+          const debt   = (num(B.totalDebt) ??
+                         ((num(B.shortTermDebt)||0) + (num(B.longTermDebt)||0)) ??
+                         ((num(B.longTermDebtNoncurrent)||0) + (num(B.shortTermBorrowings)||0)));
+          const cash   = (num(B.cashAndShortTermInvestments) ??
+                         ((num(B.cashAndCashEquivalents)||0) + (num(B.shortTermInvestments)||0)));
           const revenue= num(I.revenue) ?? num(I.totalRevenue) ?? null;
           const interestIncome = Math.max(0, num(I.interestIncome) ?? num(I.interestIncomeNet) ?? num(I.investmentIncome) ?? 0);
 
@@ -269,7 +292,7 @@
           let source = "SEC";
           const cik = await mapTickerToCik(t);
 
-          // 1) فحص النشاط (SIC): حرام فوري إن كان محرّم
+          // 1) فحص النشاط (SIC): تحريم مباشر للنشاطات المستبعدة
           const submissions = await fetchSEC(`https://data.sec.gov/submissions/CIK${pad10(cik)}.json`);
           const sicDesc = (submissions.sicDescription || "").toLowerCase();
           const banned = BANNED.find(k => sicDesc.includes(k));
@@ -280,7 +303,7 @@
             return;
           }
 
-          // 2) CompanyFacts: جرّب آخر ربع ثم السابق فقط
+          // 2) CompanyFacts: نجرب آخر ربع ثم السابق فقط
           let picked = null;
           try{
             const facts = await fetchSEC(`https://data.sec.gov/api/xbrl/companyfacts/CIK${pad10(cik)}.json`);
@@ -289,19 +312,19 @@
             picked = tryPickQuarterSEC(F, ends);
           }catch(_){}
 
-          // 3) لو SEC ناقص → FMP (آخر ربعين فقط)
+          // 3) لو SEC ناقص → FMP (آخر ربعين)
           if(!picked){
             const f = await fetchFromFMP_Q_LastTwo(t);
             if(f){ picked = {...f}; source = "FMP (quarter)"; }
           }
 
-          // 4) لو لا SEC ولا FMP أعطى ربع مكتمل → مباح
+          // 4) إذا لا SEC ولا FMP → مباح
           if(!picked){
             render(t, cik, {dta:null, cta:null, irr:null, status:"مباح", note:"تعذّر إيجاد بيانات ربع سنوية مكتملة."}, source, {form:"", end:""});
             return;
           }
 
-          // 5) حساب النِّسَب والقرار
+          // 5) حساب النِسب والقرار
           const dta = safeDiv(picked.debt||0, picked.assets||1);
           const cta = safeDiv(picked.cash||0, picked.assets||1);
           const irr = Math.min(1, safeDiv(picked.interestIncome||0, picked.revenue||1));
