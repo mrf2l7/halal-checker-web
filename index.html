@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Halal Stock Checker (SEC)</title>
+    <style>
+      body{font-family:system-ui,Segoe UI,Tahoma,Arial,sans-serif;max-width:860px;margin:40px auto;padding:16px}
+      .row{display:flex;gap:8px;margin:12px 0}
+      input{flex:1;padding:10px 12px;border:1px solid #ddd;border-radius:10px;text-transform:uppercase}
+      button{padding:10px 16px;border-radius:10px;border:1px solid #111;background:#111;color:#fff;cursor:pointer}
+      .card{border:1px solid #eee;border-radius:12px;padding:16px;margin-top:12px}
+      .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:16px}
+      .tile{border:1px solid #f1f1f1;border-radius:10px;padding:12px}
+      .k{opacity:.7;font-size:12px}
+      .v{font-size:20px;font-weight:700}
+      .badge{padding:6px 10px;border-radius:16px;font-weight:700}
+      .ok{background:#e6f7e9;color:#167c2b}
+      .bad{background:#fde8e8;color:#b00020}
+      .warn{background:#fff8e1;color:#a67c00}
+      .muted{opacity:.65;font-size:12px;margin-top:10px}
+      .err{color:#b00020;margin-top:8px}
+    </style>
+  </head>
+  <body>
+    <h1>Halal Stock Checker (SEC)</h1>
+    <p class="muted">المصدر: ملفات SEC الرسمية (Submissions + XBRL CompanyFacts). لا مزوّدين خارجيين.</p>
+
+    <div class="row">
+      <input id="ticker" placeholder="AAPL, TSLA, MSFT ..." />
+      <button id="btn">فحص</button>
+    </div>
+
+    <div id="error" class="err"></div>
+    <div id="out"></div>
+
+    <script>
+      const pct = x => (typeof x === "number" ? (x*100).toFixed(2) + "%" : "-");
+
+      document.getElementById("btn").onclick = async () => {
+        const t = document.getElementById("ticker").value.trim().toUpperCase();
+        const out = document.getElementById("out");
+        const err = document.getElementById("error");
+        err.textContent = ""; out.innerHTML = "";
+        if(!t){ err.textContent = "اكتب رمز السهم أولاً"; return; }
+
+        try{
+          const r = await fetch(`/api/check?ticker=${encodeURIComponent(t)}`, {cache:"no-store"});
+          const j = await r.json();
+          if(!r.ok){ throw new Error(j.error || "حدث خطأ"); }
+
+          const badgeClass = j.status==="Halal" ? "ok" : (j.status==="Haram" ? "bad" : "warn");
+          out.innerHTML = `
+            <div class="card">
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <div>
+                  <div style="font-size:18px;font-weight:600">${j.ticker} — CIK ${String(j.cik).padStart(10,"0")}</div>
+                  <div class="muted" style="margin-top:4px">${j.note || "&nbsp;"}</div>
+                </div>
+                <span class="badge ${badgeClass}">${j.status}</span>
+              </div>
+              <div class="grid">
+                <div class="tile"><div class="k">Debt / Assets</div><div class="v">${pct(j.debtToAssets)}</div></div>
+                <div class="tile"><div class="k">Cash / Assets</div><div class="v">${pct(j.cashToAssets)}</div></div>
+                <div class="tile"><div class="k">Impure Revenue</div><div class="v">${pct(j.impureRevenue)}</div></div>
+              </div>
+              <div class="muted">المعايير: الدين ≤ 30%، النقدية ≤ 30%، الإيراد غير المباح ≤ 5% (إن وُجد → تطهير).</div>
+            </div>`;
+        }catch(e){
+          err.textContent = "Error: " + (e.message || e);
+        }
+      };
+    </script>
+  </body>
+</html>
